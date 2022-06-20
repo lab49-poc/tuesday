@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  title: Sample Service API
+  name: sample-service
+  description: The Sample Service API allows you to send errors to Rollbar or Sentry.
+  tags:
+    - unstable
+spec:
+  type: openapi
+  lifecycle: production
+  owner: sample-team
+  system: sample-system
+  definition:
+    $text: https://github.com/RoadieHQ/sample-service/blob/main/api-spec.yaml

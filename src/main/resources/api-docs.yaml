@@ -1,0 +1,39 @@
+openapi: 3.0.1
+info:
+  title: OpenAPI definition
+  version: v0
+paths:
+  /greeting:
+    get:
+      tags:
+      - greeting-controller
+      operationId: greeting
+      parameters:
+      - name: name
+        in: query
+        required: false
+        schema:
+          type: string
+          default: World
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/Greeting'
+
+components:
+  schemas:
+    Greeting:
+      type: object
+      example:
+        id: 123456
+        content: hello world
+      properties:
+        id:
+          type: integer
+          format: int64
+        content:
+          type: string
+

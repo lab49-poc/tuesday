@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: tuesday
+  name: tuesday
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tuesday
+  template:
+    metadata:
+      labels:
+        app: tuesday
+    spec:
+      containers:
+      - image: --image--
+        name: tuesday
+        ports:
+          - containerPort: 8080

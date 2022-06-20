@@ -1,0 +1,11 @@
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: tuesday
+  description: demo for architecture
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: lab49-poc
+  definition:
+    $text: https://github.com/lab49-poc/tuesday/blob/master/src/main/resources/api-docs.yaml

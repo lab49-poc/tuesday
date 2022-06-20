@@ -1,0 +1,205 @@
+name: Java build using maven, deployment to AWS EKS via AWS ECR
+######################################
+## Use maven and spring-boot-maven-plugin to build a docker image for the java project
+## The docker image is saved to AWS ECR repository ${{ secrets.ECR_REPOSITORY_NAME }}
+## The application is deployed to AWS EKS as configured in ${{ secrets.KUBE_CONFIG }}
+## AWS cli is setup in order for kubectl to work with AWS EKS
+## kubectl is used to deploy to AWS EKS
+##
+## These github organisation secrets must be available
+## KUBE_CONFIG           contains result of `cat ~/.kube/config | base64`
+## AWS_ACCESS_KEY_ID     used to login to AWS refer https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html#cli-configure-quickstart-creds-create
+## AWS_SECRET_ACCESS_KEY used to login to AWS refer https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html#cli-configure-quickstart-creds-create
+## AWS_REGION            AWS region e.g. ap-southeast-2
+## ECR_REPOSITORY_NAME   AWS ECR repository name
+##
+## TODO
+## establish the best way to tag images in AWS ECR
+## establish best way to structure build, either
+## build should be multistage with approvals before deployment, or
+## deploy on pull request
+######################################
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+  # allows manual triggering
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+          cache: 'maven'
+
+      - name: create kube config
+        continue-on-error: true
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          echo $KUBE_CONFIG | base64 -id  > ~/.kube/config
+
+      - name: debug secrets
+        continue-on-error: true
+        run: |
+          echo "AWS_REGION=${{ secrets.AWS_REGION }}"
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          echo "KUBE_CONFIG=${{ secrets.KUBE_CONFIG }}"
+
+
+      - name: configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: debug aws
+        continue-on-error: true
+        run: |
+          aws eks list-clusters
+
+      ## kubectl latest version 1.24 breaks authentication, kubeconfig will have to be updated
+      - name: install kubectl
+        run: |
+          VERSION=$(curl --silent https://storage.googleapis.com/kubernetes-release/release/stable.txt)
+          VERSION=v1.23.6
+
+          echo $VERSION
+
+          curl https://storage.googleapis.com/kubernetes-release/release/$VERSION/bin/linux/amd64/kubectl \
+            --progress-bar \
+            --location \
+            --remote-name
+
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+          kubectl version
+
+      - name: debug kubectl
+        run: |
+          kubectl cluster-info
+          kubectl get all -A
+
+
+#      - name: Dump GitHub context
+#        id: github_context_step
+#        run: echo '${{ toJSON(github) }}'
+#      - name: Dump job context
+#        run: echo '${{ toJSON(job) }}'
+#      - name: Dump steps context
+#        run: echo '${{ toJSON(steps) }}'
+#      - name: Dump runner context
+#        run: echo '${{ toJSON(runner) }}'
+#      - name: Dump strategy context
+#        run: echo '${{ toJSON(strategy) }}'
+#      - name: Dump matrix context
+#        run: echo '${{ toJSON(matrix) }}'
+
+
+#      - name: debug list files in the repository
+#        run: |
+#          pwd
+#          ls -la ${{ github.workspace }}
+#          cd ${{ github.workspace }}
+
+      - name: Build image with Maven
+        run: |
+          ./mvnw spring-boot:build-image
+
+          docker images
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Extract Maven project artifact details
+        run: |
+          echo "PROJECT_VERSION=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)" >> $GITHUB_ENV
+          echo "PROJECT_ARTIFACT=$(./mvnw help:evaluate -Dexpression=project.artifactId -q -DforceStdout)" >> $GITHUB_ENV
+
+      - name: debug project version
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          echo $ECR_REGISTRY/${{ secrets.ECR_REPOSITORY_NAME }}:${{ env.PROJECT_ARTIFACT }}-${{ env.PROJECT_VERSION }}
+
+      - name: Push image to ECR
+        continue-on-error: true
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          docker tag ${{ env.PROJECT_ARTIFACT }}:${{ env.PROJECT_VERSION }} $ECR_REGISTRY/${{ secrets.ECR_REPOSITORY_NAME }}:${{ env.PROJECT_ARTIFACT }}-${{ env.PROJECT_VERSION }}
+          docker tag ${{ env.PROJECT_ARTIFACT }}:${{ env.PROJECT_VERSION }} $ECR_REGISTRY/${{ secrets.ECR_REPOSITORY_NAME }}:$RUN_ID
+
+          docker images
+
+          docker push --all-tags $ECR_REGISTRY/${{ secrets.ECR_REPOSITORY_NAME }}
+
+      - name: dump ecr
+        run: |
+          aws ecr list-images --repository-name ${{ secrets.ECR_REPOSITORY_NAME }}
+          aws ecr describe-repositories
+
+      - name: Dump docker images
+        run: |
+          docker images
+
+      - name: try deploy
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          echo $ECR_REGISTRY/${{ secrets.ECR_REPOSITORY_NAME }}:${{ env.PROJECT_ARTIFACT }}-${{ env.PROJECT_VERSION }}
+
+          sed -i "s|--image--|$ECR_REGISTRY\/${{ secrets.ECR_REPOSITORY_NAME }}:${{ env.PROJECT_ARTIFACT }}-${{ env.PROJECT_VERSION }}|g" src/k8s/deployment.yaml
+
+          cat src/k8s/deployment.yaml
+
+          kubectl apply -f src/k8s/deployment.yaml
+          kubectl apply -f src/k8s/service.yaml
+          kubectl apply -f src/k8s/ingress.yaml
+
+#  deployment:
+#    needs: build
+#    runs-on: ubuntu-latest
+#    environment: production
+#    steps:
+#
+#      #    - uses: actions/setup-java@v3
+#      #      with:
+#      #        distribution: 'temurin'
+#      #        java-version: '11'
+#      #        cache: 'maven'
+#      #
+#      #    - name: Download build artifacts
+#      #      uses: actions/download-artifact@v3
+#      #      with:
+#      #        name: workspace
+#      #
+#      - name: check what we've got
+#        run: |
+#          pwd
+#          ls -la
+#          docker images
+#
+#    - name: Build image with Maven
+#      run: ./mvnw -B spring-boot:build-image -DskipTests --file pom.xml
+#
+#    - name: deploy
+#      run: |
+#        pwd
+#        ls -la
+#        docker images

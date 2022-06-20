@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: tuesday
+  name: tuesday
+spec:
+  ports:
+  - name: 8080-8080
+    port: 8080
+    targetPort: 8080
+  selector:
+    app: tuesday
+  type: ClusterIP

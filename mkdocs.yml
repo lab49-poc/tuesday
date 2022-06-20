@@ -1,0 +1,11 @@
+site_name: "tuesday"
+site_description: "demo for architecture"
+
+repo_url: https://github.com/lab49-poc/tuesday
+
+
+nav:
+  - Introduction: index.md
+
+plugins:
+  - techdocs-core
